@@ -14,7 +14,7 @@ from app.core.deps import (
     require_admin,
     require_merchant_portal_read,
     require_merchant_or_admin,
-    UserRole,
+    user_has_permission,
 )
 from app.core.audit import record_auditor_read
 from app.db.models import Place, User
@@ -81,7 +81,7 @@ def get_my_merchant_places(
     El comerciante ÚNICAMENTE puede visualizar los lugares que le pertenecen (su propio catálogo).
     Si un Administrador lo consulta, puede ver todos o los propios.
     """
-    if current_user.role == UserRole.MERCHANT.value:
+    if not user_has_permission(db, current_user, "access_admin"):
         places = (
             db.query(Place)
             .options(joinedload(Place.merchant))
@@ -91,7 +91,7 @@ def get_my_merchant_places(
     else:
         # Administradores y auditores pueden consultar todos los lugares; solo los primeros modifican.
         places = db.query(Place).options(joinedload(Place.merchant)).all()
-    if current_user.role == UserRole.AUDITOR.value:
+    if not user_has_permission(db, current_user, "write_operations"):
         record_auditor_read(db, request, current_user, "Portal Comerciante")
     return places
 
@@ -202,7 +202,10 @@ def update_place(
         )
 
     # Validar propiedad para Comerciante
-    if current_user.role == UserRole.MERCHANT.value and place.merchant_id != current_user.id:
+    if (
+        not user_has_permission(db, current_user, "access_admin")
+        and place.merchant_id != current_user.id
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Operación no autorizada: Como comerciante únicamente puedes editar tus propios atractivos turísticos.",
@@ -211,10 +214,7 @@ def update_place(
     update_data = place_in.dict(exclude_unset=True)
 
     # Solo el Administrador puede cambiar el estado de verificación
-    if "is_verified" in update_data and current_user.role not in (
-        UserRole.ADMIN.value,
-        UserRole.SUPER_ADMIN.value,
-    ):
+    if "is_verified" in update_data and not user_has_permission(db, current_user, "access_admin"):
         del update_data["is_verified"]
 
     for field, value in update_data.items():
@@ -277,7 +277,10 @@ def delete_place(
             detail=f"Lugar con ID {place_id} no existe.",
         )
 
-    if current_user.role == UserRole.MERCHANT.value and place.merchant_id != current_user.id:
+    if (
+        not user_has_permission(db, current_user, "access_admin")
+        and place.merchant_id != current_user.id
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Operación denegada: No tienes permiso para eliminar atractivos de otros comerciantes.",

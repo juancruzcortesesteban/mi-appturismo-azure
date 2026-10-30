@@ -3,11 +3,12 @@ Punto de Entrada Principal - FastAPI Backend
 Turismo Inteligente - Colombia
 """
 from pathlib import Path
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.v1.endpoints import admin, auth, chat, favorites, places, routes, system
+from app.api.v1.endpoints import admin, auth, chat, favorites, places, profile, routes, system
 from app.core.security import get_password_hash
 from app.core.seed import ensure_super_admin
 from app.db.models import Base, Place, User
@@ -28,19 +29,30 @@ UPLOADS_DIRECTORY.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIRECTORY), name="uploads")
 
 # Configuración de CORS
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "FRONTEND_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=allowed_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Inclusión de Routers de la API v1
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Autenticación y Usuarios (RBAC)"])
+app.include_router(profile.router, prefix="/api/v1", tags=["Perfil de Usuario"])
 app.include_router(places.router, prefix="/api/v1/places", tags=["Lugares Turísticos"])
 app.include_router(favorites.router, prefix="/api/v1/favorites", tags=["Favoritos (Turista)"])
 app.include_router(routes.router, prefix="/api/v1/routes", tags=["Rutas Inteligentes"])
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["Guía Turístico Gemini"])
+app.include_router(chat.router, prefix="/api/chat", tags=["Guía Turístico Gemini"])
 app.include_router(system.router, prefix="/api/v1/system", tags=["Sistema (SuperAdmin)"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Monitoreo de Seguridad"])
 
@@ -163,3 +175,8 @@ def seed_initial_data():
 def health_check():
     """Endpoint de comprobación de salud del servicio."""
     return {"status": "ok", "service": "Turismo Inteligente - Colombia API", "version": "2.0.0"}
+
+
+STATIC_DIRECTORY = Path(__file__).resolve().parent / "static"
+if STATIC_DIRECTORY.is_dir():
+    app.mount("/", StaticFiles(directory=STATIC_DIRECTORY, html=True), name="frontend")

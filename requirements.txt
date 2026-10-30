@@ -10,3 +10,6 @@ python-multipart>=0.0.6
 pytest>=7.3.0
 httpx>=0.24.0
 networkx>=3.0
+pyotp>=2.9.0
+qrcode[pil]>=7.4.2
+google-genai>=1.0.0

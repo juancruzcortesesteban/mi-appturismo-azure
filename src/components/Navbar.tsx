@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { UserSession } from '../utils/rbac';
 import { AuthModal } from './AuthModal';
-import { Compass, ShieldCheck, Store, MapPin, Code2, LogOut, UserRound } from 'lucide-react';
+import { Compass, ShieldCheck, Store, MapPin, Code2, LogOut, UserRound, Contact } from 'lucide-react';
 
 interface NavbarProps {
   currentUser: UserSession | null;
   isAuthLoading: boolean;
-  onAuthenticated: (token: string, user: UserSession) => void;
+  authPromptVersion: number;
+  onAuthenticated: (user: UserSession) => void;
   onLogout: () => void;
+  onOpenProfile: () => void;
   activeView: 'index' | 'places' | 'merchant' | 'admin' | 'code';
   onNavigate: (view: 'index' | 'places' | 'merchant' | 'admin' | 'code') => void;
 }
@@ -15,21 +17,24 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({
   currentUser,
   isAuthLoading,
+  authPromptVersion,
   onAuthenticated,
   onLogout,
+  onOpenProfile,
   activeView,
   onNavigate,
 }) => {
-  const [isAuthOpen, setIsAuthOpen] = useState(false);
-  const canManagePlaces = currentUser?.role === 'Comerciante'
-    || currentUser?.role === 'Administrador'
-    || currentUser?.role === 'SuperAdmin'
-    || (currentUser?.role === 'Auditor' && currentUser.permisos?.ver_comerciante === true);
-  const isAdmin = currentUser?.role === 'Administrador'
-    || currentUser?.role === 'SuperAdmin'
-    || (currentUser?.role === 'Auditor' && currentUser.permisos?.ver_admin === true);
-  const canViewCode = currentUser?.role === 'SuperAdmin'
-    || (currentUser?.role === 'Auditor' && currentUser.permisos?.ver_rbac === true);
+  const [isAuthOpen, setIsAuthOpen] = useState(() => (
+    new URLSearchParams(window.location.search).has('token')
+    || new URLSearchParams(window.location.search).has('reset_token')
+  ));
+
+  useEffect(() => {
+    if (authPromptVersion > 0) setIsAuthOpen(true);
+  }, [authPromptVersion]);
+  const canManagePlaces = currentUser?.permissions?.includes('access_merchant') === true;
+  const isAdmin = currentUser?.permissions?.includes('access_admin') === true;
+  const canViewCode = currentUser?.permissions?.includes('access_rbac') === true;
 
   const linkClass = (view: typeof activeView) => `text-sm font-medium transition-colors cursor-pointer py-1 ${
     activeView === view
@@ -103,6 +108,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </span>
                 </div>
                 <button
+                  type="button"
+                  onClick={onOpenProfile}
+                  aria-label="Abrir mi perfil"
+                  title="Mi Perfil"
+                  className="flex cursor-pointer items-center gap-1.5 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-bold text-[#F8F6F0] transition hover:border-[#D4AF37]/40 hover:bg-[#D4AF37]/10"
+                >
+                  <Contact className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Mi Perfil</span>
+                </button>
+                <button
                   onClick={onLogout}
                   className="flex cursor-pointer items-center gap-1.5 rounded-xl border border-white/15 bg-white/5 px-3.5 py-2 text-xs font-bold text-[#F8F6F0] transition hover:border-[#E67E22]/40 hover:bg-[#E67E22]/10"
                 >
@@ -136,9 +151,9 @@ export const Navbar: React.FC<NavbarProps> = ({
       {isAuthOpen && (
         <AuthModal
           onClose={() => setIsAuthOpen(false)}
-          onAuthenticated={(token, user) => {
+          onAuthenticated={(user) => {
             setIsAuthOpen(false);
-            onAuthenticated(token, user);
+            onAuthenticated(user);
           }}
         />
       )}

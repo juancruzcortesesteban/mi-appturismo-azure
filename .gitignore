@@ -8,3 +8,5 @@ coverage/
 !.env.example
 app/uploads/
 venv/ 
+__pycache__/
+*.db

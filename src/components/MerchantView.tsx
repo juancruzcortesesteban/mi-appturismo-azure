@@ -1,5 +1,4 @@
 import React, { FormEvent, useEffect, useState } from 'react';
-import { AuditorPermissions, UserRole } from '../utils/rbac';
 import {
   ApiPlace,
   createMerchantPlace,
@@ -43,15 +42,13 @@ function toMerchantPlace(place: ApiPlace): MerchantPlace {
 }
 
 interface MerchantViewProps {
-  currentRole: UserRole;
-  permissions?: AuditorPermissions | null;
+  effectivePermissions?: string[];
   onNavigate: (view: 'index' | 'places' | 'merchant' | 'admin' | 'code') => void;
   onTriggerAlert: (title: string, message: string, isWarning?: boolean) => void;
 }
 
 export const MerchantView: React.FC<MerchantViewProps> = ({
-  currentRole,
-  permissions,
+  effectivePermissions = [],
   onNavigate,
   onTriggerAlert,
 }) => {
@@ -72,8 +69,8 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
   const [formLongitude, setFormLongitude] = useState('');
   const [formImage, setFormImage] = useState<File | null>(null);
   const [formError, setFormError] = useState('');
-  const isAuditor = currentRole === 'Auditor';
-  const canReadPortal = !isAuditor || permissions?.ver_comerciante === true;
+  const canReadPortal = effectivePermissions.includes('access_merchant');
+  const isReadOnly = !effectivePermissions.includes('write_operations');
 
   useEffect(() => {
     if (!canReadPortal) {
@@ -100,7 +97,7 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
   }, [canReadPortal, placesReloadKey]);
 
   // Verificación de RBAC en Vista
-  if (currentRole === 'Turista' || !canReadPortal) {
+  if (!canReadPortal) {
     return (
       <div className="py-16 max-w-xl mx-auto text-center space-y-6">
         <div className="w-16 h-16 rounded-2xl bg-red-500/15 text-red-500 flex items-center justify-center mx-auto border border-red-500/30 shadow-lg">
@@ -109,9 +106,7 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
         <div>
           <h2 className="text-2xl font-bold text-white font-display">Acceso Denegado (RBAC Guard)</h2>
           <p className="text-sm text-neutral-400 mt-2 leading-relaxed">
-            {isAuditor
-              ? 'Tu cuenta Auditor no tiene permiso para consultar este módulo.'
-              : <>Tu cuenta actual tiene rol de <strong className="text-[#E67E22]">Turista</strong>. Este portal está reservado para prestadores de servicios turísticos y comerciantes verificados.</>}
+            Tu rol actual no tiene permiso para consultar este módulo.
           </p>
         </div>
         <div className="pt-4 flex justify-center gap-3">
@@ -225,13 +220,13 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
             Mis Atractivos & Experiencias
           </h1>
           <p className="text-sm text-neutral-400 mt-1 max-w-xl">
-            {isAuditor
+            {isReadOnly
               ? 'Consulta de atractivos turísticos con permisos de solo lectura.'
               : 'Como comerciante, únicamente puedes crear y modificar tus propios atractivos. No posees privilegios para alterar configuraciones globales del sistema.'}
           </p>
         </div>
 
-        {!isAuditor && <button
+        {!isReadOnly && <button
           onClick={() => {
             document.getElementById('merchant-form-section')?.scrollIntoView({ behavior: 'smooth' });
           }}
@@ -258,20 +253,20 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
                 <th className="py-3 px-4">Ubicación</th>
                 <th className="py-3 px-4">Tarifa de Entrada</th>
                 <th className="py-3 px-4">Estado</th>
-                {!isAuditor && <th className="py-3 px-4 text-right">Acciones</th>}
+                {!isReadOnly && <th className="py-3 px-4 text-right">Acciones</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
               {isLoadingPlaces && (
                 <tr>
-                  <td colSpan={isAuditor ? 5 : 6} className="py-6 px-4 text-center text-neutral-400">
+                  <td colSpan={isReadOnly ? 5 : 6} className="py-6 px-4 text-center text-neutral-400">
                     Cargando atractivos desde el servidor...
                   </td>
                 </tr>
               )}
               {!isLoadingPlaces && placesError && (
                 <tr>
-                  <td colSpan={isAuditor ? 5 : 6} className="py-4 px-4 text-center text-red-300">
+                  <td colSpan={isReadOnly ? 5 : 6} className="py-4 px-4 text-center text-red-300">
                     {placesError}{' '}
                     <button
                       type="button"
@@ -285,7 +280,7 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
               )}
               {!isLoadingPlaces && !placesError && places.length === 0 && (
                 <tr>
-                  <td colSpan={isAuditor ? 5 : 6} className="py-6 px-4 text-center text-neutral-400">
+                  <td colSpan={isReadOnly ? 5 : 6} className="py-6 px-4 text-center text-neutral-400">
                     Aún no hay atractivos asociados a esta cuenta.
                   </td>
                 </tr>
@@ -314,7 +309,7 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
                       <span>{place.status}</span>
                     </span>
                   </td>
-                  {!isAuditor && <td className="py-3.5 px-4 text-right space-x-2">
+                  {!isReadOnly && <td className="py-3.5 px-4 text-right space-x-2">
                     <button
                       onClick={() => {
                         onTriggerAlert(
@@ -343,7 +338,7 @@ export const MerchantView: React.FC<MerchantViewProps> = ({
       </section>
 
       {/* Formulario de Creación de Lugar */}
-      {!isAuditor && <section
+      {!isReadOnly && <section
         id="merchant-form-section"
         className="bg-[#141b24]/80 backdrop-blur-md border border-white/10 rounded-[20px] p-6 lg:p-8 shadow-xl"
       >

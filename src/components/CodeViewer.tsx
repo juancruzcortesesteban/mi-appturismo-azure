@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { ChevronRight, Code2, FileCode, Folder, FolderOpen, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { fetchSourceTree, SourceTreeNode, SourceTreeResponse } from '../utils/system';
-import { AuditorPermissions, UserRole } from '../utils/rbac';
+import { UserRole } from '../utils/rbac';
 
 interface CodeViewerProps {
   currentRole: UserRole;
-  permissions?: AuditorPermissions | null;
+  effectivePermissions?: string[];
 }
 
 const DENIED_MESSAGE = 'Acceso denegado: esta sección requiere el rol SuperAdmin o Auditor.';
@@ -51,9 +51,11 @@ const FileTreeItem: React.FC<{ node: SourceTreeNode }> = ({ node }) => {
   );
 };
 
-export const CodeViewer: React.FC<CodeViewerProps> = ({ currentRole, permissions }) => {
-  const canView = currentRole === 'SuperAdmin'
-    || (currentRole === 'Auditor' && permissions?.ver_rbac === true);
+export const CodeViewer: React.FC<CodeViewerProps> = ({
+  currentRole,
+  effectivePermissions = [],
+}) => {
+  const canView = effectivePermissions.includes('access_rbac');
   const [sourceTree, setSourceTree] = useState<SourceTreeResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');

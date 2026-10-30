@@ -10,6 +10,7 @@ import { UserRole } from '../utils/rbac';
 
 interface SecurityAuditPanelProps {
   currentRole: UserRole;
+  permissions?: string[];
 }
 
 const formatColombiaTime = (timestamp: string) => new Intl.DateTimeFormat('es-CO', {
@@ -18,7 +19,10 @@ const formatColombiaTime = (timestamp: string) => new Intl.DateTimeFormat('es-CO
   timeZone: 'America/Bogota',
 }).format(new Date(timestamp));
 
-export const SecurityAuditPanel: React.FC<SecurityAuditPanelProps> = ({ currentRole }) => {
+export const SecurityAuditPanel: React.FC<SecurityAuditPanelProps> = ({
+  currentRole,
+  permissions = [],
+}) => {
   const [audit, setAudit] = useState<SecurityAuditResponse | null>(null);
   const [readLogs, setReadLogs] = useState<AuditorReadLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -27,7 +31,7 @@ export const SecurityAuditPanel: React.FC<SecurityAuditPanelProps> = ({ currentR
   const [readLogsError, setReadLogsError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
   const [activeTab, setActiveTab] = useState<'security' | 'reads'>('security');
-  const canViewReadLogs = currentRole === 'SuperAdmin';
+  const canViewReadLogs = permissions.includes('manage_roles');
 
   useEffect(() => {
     let isMounted = true;

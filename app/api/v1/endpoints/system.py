@@ -5,7 +5,7 @@ from typing import Dict, List, Union
 from fastapi import APIRouter, Depends, Request
 
 from app.core.audit import record_auditor_read
-from app.core.deps import UserRole, require_super_admin_or_auditor
+from app.core.deps import require_super_admin_or_auditor, user_has_permission
 from app.db.models import User
 from app.db.session import get_db
 from sqlalchemy.orm import Session
@@ -65,6 +65,6 @@ def read_source_tree(
         "root": PROJECT_ROOT.name,
         "tree": build_source_tree(PROJECT_ROOT),
     }
-    if current_user.role == UserRole.AUDITOR.value:
+    if not user_has_permission(db, current_user, "manage_roles"):
         record_auditor_read(db, request, current_user, "Archivos RBAC")
     return response

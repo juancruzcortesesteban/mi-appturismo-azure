@@ -3,9 +3,10 @@ Sistema de Dependencias y Control de Acceso Basado en Roles (RBAC) Estricto
 Turismo Inteligente - Colombia
 """
 from enum import Enum
-import json
-from typing import List, Optional
-from fastapi import Depends, HTTPException, Request, Security, status
+from datetime import datetime, timedelta
+import os
+from typing import Optional
+from fastapi import Depends, HTTPException, Request, Response, Security, status
 from fastapi.security import OAuth2PasswordBearer, HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.security import SECRET_KEY, ALGORITHM
 from app.core.audit import record_audit_event
 from app.db.session import get_db
-from app.db.models import User
+from app.db.models import Permission, Role, RolePermission, User, UserPermission
 
 # Esquema de autenticación Bearer
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
@@ -28,17 +29,39 @@ class UserRole(str, Enum):
     TOURIST = "Turista"
 
 
-# Jerarquía numérica de roles para evaluaciones de privilegios
-ROLE_HIERARCHY = {
-    UserRole.SUPER_ADMIN: 4,
-    UserRole.ADMIN: 3,
-    UserRole.AUDITOR: 2,
-    UserRole.MERCHANT: 2,
-    UserRole.TOURIST: 1,
-}
+SESSION_IDLE_TIMEOUT = timedelta(minutes=15)
+
+
+def _session_cookie_headers(request: Request) -> dict[str, str]:
+    cookie_response = Response(status_code=status.HTTP_401_UNAUTHORIZED)
+    cookie_response.delete_cookie(
+        key="access_token",
+        httponly=True,
+        secure=(
+            request.url.scheme == "https"
+            or os.getenv("COOKIE_SECURE", "false").strip().lower() == "true"
+            or os.getenv("APP_ENV", "development").strip().lower() == "production"
+        ),
+        samesite="lax",
+        path="/",
+    )
+    cookie_headers = cookie_response.headers.getlist("set-cookie")
+    return {"set-cookie": cookie_headers[0]} if cookie_headers else {}
+
+
+def _unauthorized(request: Request, detail: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers={
+            "WWW-Authenticate": "Bearer",
+            **_session_cookie_headers(request),
+        },
+    )
 
 
 def get_current_user(
+    request: Request,
     db: Session = Depends(get_db),
     auth_header: Optional[HTTPAuthorizationCredentials] = Security(http_bearer),
 ) -> User:
@@ -46,61 +69,78 @@ def get_current_user(
     Extrae y valida el JWT token. Retorna la instancia de usuario autenticado.
     Lanza 401 si no hay credenciales o son inválidas.
     """
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="No se pudieron validar las credenciales de acceso.",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    if not auth_header:
-        raise credentials_exception
-
-    token = auth_header.credentials
+    invalid_credentials_detail = "No se pudieron validar las credenciales de acceso."
+    token = auth_header.credentials if auth_header else request.cookies.get("access_token")
+    if not token:
+        raise _unauthorized(request, invalid_credentials_detail)
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
-        role_claim: str = payload.get("role")
-        if email is None:
-            raise credentials_exception
+        session_id: str = payload.get("session_id")
+        if email is None or session_id is None:
+            raise _unauthorized(request, "La sesión no es válida. Inicia sesión nuevamente.")
     except JWTError:
-        raise credentials_exception
+        raise _unauthorized(request, invalid_credentials_detail)
 
     user = db.query(User).filter(User.email == email).first()
     if user is None or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Usuario inactivo o no encontrado en el sistema.",
+        raise _unauthorized(request, "Usuario inactivo o no encontrado en el sistema.")
+
+    if user.current_session_token_id != session_id:
+        raise _unauthorized(
+            request,
+            "Esta sesión fue reemplazada por un inicio de sesión en otro dispositivo.",
         )
 
-    # Validar coherencia del rol
-    if role_claim and user.role != role_claim:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Inconsistencia de permisos detectada en la sesión.",
-        )
+    now = datetime.utcnow()
+    if user.last_activity_at is None or now - user.last_activity_at >= SESSION_IDLE_TIMEOUT:
+        raise _unauthorized(request, "La sesión expiró por inactividad. Inicia sesión nuevamente.")
 
+    user.last_activity_at = now
+    db.commit()
     return user
 
 
 def get_current_active_user_optional(
+    request: Request,
     db: Session = Depends(get_db),
     auth_header: Optional[HTTPAuthorizationCredentials] = Security(http_bearer),
 ) -> Optional[User]:
     """Permite el acceso a endpoints públicos pero identifica al usuario si está logueado."""
-    if not auth_header:
+    if not auth_header and not request.cookies.get("access_token"):
         return None
     try:
-        return get_current_user(db=db, auth_header=auth_header)
+        return get_current_user(request=request, db=db, auth_header=auth_header)
     except HTTPException:
         return None
 
 
-class RoleChecker:
-    """
-    Verificador de permisos RBAC para dependencias de FastAPI (Depends/Security).
-    Permite restringir endpoints a una lista específica de roles autorizados.
-    """
-    def __init__(self, allowed_roles: List[str]):
-        self.allowed_roles = allowed_roles
+def user_has_permission(db: Session, user: User, permission_name: str) -> bool:
+    override = (
+        db.query(UserPermission.granted)
+        .join(Permission, Permission.id == UserPermission.permission_id)
+        .filter(
+            UserPermission.user_id == user.id,
+            Permission.name == permission_name,
+        )
+        .first()
+    )
+    if override is not None:
+        return bool(override[0])
+
+    return (
+        db.query(RolePermission.role_id)
+        .join(Role, Role.id == RolePermission.role_id)
+        .join(Permission, Permission.id == RolePermission.permission_id)
+        .filter(Role.name == user.role, Permission.name == permission_name)
+        .first()
+        is not None
+    )
+
+
+class PermissionChecker:
+    def __init__(self, permission_name: str):
+        self.permission_name = permission_name
 
     def __call__(
         self,
@@ -108,92 +148,45 @@ class RoleChecker:
         db: Session = Depends(get_db),
         current_user: User = Depends(get_current_user),
     ) -> User:
-        if current_user.role not in self.allowed_roles:
-            path = request.url.path
-            is_admin_endpoint = (
-                path.startswith("/api/v1/admin/")
-                or path.startswith("/api/v1/auth/users")
-                or path == "/api/v1/system/source-code"
-                or (path.startswith("/api/v1/places/") and path.endswith("/status"))
-            )
-            if current_user.role == UserRole.TOURIST.value and is_admin_endpoint:
-                record_audit_event(
-                    db,
-                    request,
-                    user_id=current_user.id,
-                    email=current_user.email,
-                    event="Intento de acceso administrativo",
-                    status="Fallido",
-                    is_suspicious=True,
-                    alert_reason="Alerta de Intrusión",
-                    details=f"{request.method} {path}",
-                )
-                db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Acceso denegado: El rol '{current_user.role}' no cuenta con los privilegios requeridos para esta operación. Roles autorizados: {', '.join(self.allowed_roles)}.",
-            )
-        return current_user
-
-
-class AuditorPermissionChecker:
-    def __init__(self, allowed_roles: List[str], permission: str, module: str):
-        self.allowed_roles = allowed_roles
-        self.permission = permission
-        self.module = module
-
-    def __call__(
-        self,
-        current_user: User = Depends(get_current_user),
-    ) -> User:
-        if current_user.role == UserRole.AUDITOR.value:
-            try:
-                permissions = json.loads(current_user.permisos or "{}")
-            except (TypeError, json.JSONDecodeError) as error:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="No hay permisos válidos asignados para este módulo.",
-                ) from error
-            if not isinstance(permissions, dict) or permissions.get(self.permission) is not True:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"El rol Auditor no tiene habilitado el acceso al módulo {self.module}.",
-                )
+        if user_has_permission(db, current_user, self.permission_name):
             return current_user
 
-        if current_user.role not in self.allowed_roles:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="No cuentas con permisos para consultar este módulo.",
+        path = request.url.path
+        is_admin_endpoint = (
+            path.startswith("/api/v1/admin/")
+            or path.startswith("/api/v1/auth/users")
+            or path == "/api/v1/system/source-code"
+            or (path.startswith("/api/v1/places/") and path.endswith("/status"))
+        )
+        if is_admin_endpoint:
+            record_audit_event(
+                db,
+                request,
+                user_id=current_user.id,
+                email=current_user.email,
+                event="Intento de acceso administrativo",
+                status="Fallido",
+                is_suspicious=True,
+                alert_reason="Alerta de Intrusión",
+                details=f"{request.method} {path}; permiso requerido={self.permission_name}",
             )
-        return current_user
+            db.commit()
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Acceso denegado: falta el permiso '{self.permission_name}'.",
+        )
 
 
-# Dependencias preconfiguradas reutilizables
-require_admin = RoleChecker([UserRole.SUPER_ADMIN.value, UserRole.ADMIN.value])
-require_admin_or_auditor = AuditorPermissionChecker([
-    UserRole.SUPER_ADMIN.value,
-    UserRole.ADMIN.value,
-], "ver_admin", "Administración")
-require_super_admin = RoleChecker([UserRole.SUPER_ADMIN.value])
-require_super_admin_or_auditor = AuditorPermissionChecker([
-    UserRole.SUPER_ADMIN.value,
-], "ver_rbac", "Archivos RBAC")
-require_merchant = RoleChecker([UserRole.MERCHANT.value])
-require_merchant_or_admin = RoleChecker([
-    UserRole.SUPER_ADMIN.value,
-    UserRole.ADMIN.value,
-    UserRole.MERCHANT.value,
-])
-require_merchant_portal_read = AuditorPermissionChecker([
-    UserRole.SUPER_ADMIN.value,
-    UserRole.ADMIN.value,
-    UserRole.MERCHANT.value,
-], "ver_comerciante", "Portal Comerciante")
-require_authenticated = RoleChecker([
-    UserRole.SUPER_ADMIN.value,
-    UserRole.ADMIN.value,
-    UserRole.AUDITOR.value,
-    UserRole.MERCHANT.value,
-    UserRole.TOURIST.value,
-])
+def require_permission(permission_name: str) -> PermissionChecker:
+    return PermissionChecker(permission_name)
+
+
+require_admin = require_permission("access_admin")
+require_admin_or_auditor = require_permission("access_admin")
+require_super_admin = require_permission("manage_roles")
+require_super_admin_or_auditor = require_permission("access_rbac")
+require_merchant = require_permission("access_merchant")
+require_merchant_or_admin = require_permission("write_operations")
+require_merchant_portal_read = require_permission("access_merchant")
+require_authenticated = require_permission("read_only")

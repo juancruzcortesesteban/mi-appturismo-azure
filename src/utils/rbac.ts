@@ -3,7 +3,7 @@
  * Turismo Inteligente - Colombia
  */
 
-export type UserRole = 'SuperAdmin' | 'Administrador' | 'Auditor' | 'Comerciante' | 'Turista';
+export type UserRole = string;
 
 export interface AuditorPermissions {
   ver_rbac: boolean;
@@ -16,7 +16,9 @@ export interface UserSession {
   email: string;
   fullName: string;
   role: UserRole;
+  twoFactorEnabled?: boolean;
   permisos?: AuditorPermissions | null;
+  permissions?: string[];
 }
 
 export interface PlaceEntity {
@@ -26,7 +28,7 @@ export interface PlaceEntity {
   category: string;
 }
 
-export const ROLE_LEVELS: Record<UserRole, number> = {
+export const ROLE_LEVELS: Partial<Record<UserRole, number>> = {
   SuperAdmin: 4,
   Administrador: 3,
   Auditor: 2,
@@ -38,9 +40,10 @@ export const ROLE_LEVELS: Record<UserRole, number> = {
  * Evalúa si un usuario tiene permiso para acceder a una ruta protegida.
  */
 export function canAccessView(
-  role: UserRole,
+  _role: UserRole,
   targetView: 'index' | 'places' | 'merchant' | 'admin' | 'code',
-  permissions?: AuditorPermissions | null
+  _legacyPermissions?: AuditorPermissions | null,
+  permissionNames: string[] = [],
 ): {
   allowed: boolean;
   reason?: string;
@@ -50,35 +53,21 @@ export function canAccessView(
   }
 
   if (targetView === 'code') {
-    return {
-      allowed: role === 'SuperAdmin' || (role === 'Auditor' && permissions?.ver_rbac === true),
-    };
+    return { allowed: permissionNames.includes('access_rbac') };
   }
 
   if (targetView === 'merchant') {
-    if (role === 'Auditor') {
-      return { allowed: permissions?.ver_comerciante === true };
-    }
-    if (role === 'Turista') {
-      return {
-        allowed: false,
-        reason: 'Los turistas solo tienen permisos de lectura y consulta. El portal de Comerciantes requiere rol Comerciante o Administrador.',
-      };
-    }
-    return { allowed: true };
+    return {
+      allowed: permissionNames.includes('access_merchant'),
+      reason: 'Tu rol no tiene el permiso para acceder al portal de Comerciantes.',
+    };
   }
 
   if (targetView === 'admin') {
-    if (role === 'Auditor') {
-      return { allowed: permissions?.ver_admin === true };
-    }
-    if (role !== 'Administrador' && role !== 'SuperAdmin') {
-      return {
-        allowed: false,
-        reason: `El rol '${role}' no cuenta con privilegios administrativos. Acceso reservado para Administradores y Auditores.`,
-      };
-    }
-    return { allowed: true };
+    return {
+      allowed: permissionNames.includes('access_admin'),
+      reason: 'Tu rol no tiene el permiso para acceder a la administración.',
+    };
   }
 
   return { allowed: true };
@@ -92,36 +81,24 @@ export function canManagePlace(user: UserSession, place: PlaceEntity): {
   canDelete: boolean;
   reason?: string;
 } {
-  // Administrador tiene control total
-  if (user.role === 'Administrador' || user.role === 'SuperAdmin') {
+  const permissions = user.permissions ?? [];
+  if (permissions.includes('access_admin')) {
     return { canEdit: true, canDelete: true };
   }
 
-  if (user.role === 'Auditor') {
+  if (!permissions.includes('write_operations')) {
     return {
       canEdit: false,
       canDelete: false,
-      reason: 'El rol Auditor tiene acceso de solo lectura.',
+      reason: 'Tu cuenta tiene permisos de solo lectura.',
     };
   }
 
-  // Comerciante solo puede editar y eliminar sus propios lugares
-  if (user.role === 'Comerciante') {
-    const isOwner = user.id === place.merchantId;
-    return {
-      canEdit: isOwner,
-      canDelete: isOwner,
-      reason: isOwner
-        ? undefined
-        : 'Como comerciante únicamente puedes modificar los lugares creados por tu cuenta.',
-    };
-  }
-
-  // Turista no puede crear, editar ni eliminar
+  const isOwner = user.id === place.merchantId;
   return {
-    canEdit: false,
-    canDelete: false,
-    reason: 'Los turistas tienen acceso estrictamente de solo lectura y favoritos.',
+    canEdit: isOwner,
+    canDelete: isOwner,
+    reason: isOwner ? undefined : 'Solo puedes modificar lugares de tu propiedad.',
   };
 }
 

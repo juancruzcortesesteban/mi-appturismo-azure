@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 import json
 import re
-from typing import Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 MAX_PASSWORD_BYTES = 72
@@ -85,7 +85,7 @@ class UserCreate(UserBase):
 
 class AdminUserCreate(UserBase):
     password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
-    role: UserRoleEnum
+    role: str = Field(..., min_length=2, max_length=50)
     permisos: Optional[AuditorPermissions] = None
 
     @field_validator("password")
@@ -110,15 +110,17 @@ class UserLogin(BaseModel):
 
 
 class UserUpdateRole(BaseModel):
-    role: UserRoleEnum
+    role: str = Field(..., min_length=2, max_length=50)
 
 
 class UserResponse(UserBase):
     id: int
     role: str
     is_active: bool
+    two_factor_enabled: bool = False
     created_at: datetime
     permisos: Optional[AuditorPermissions] = None
+    permissions: List[str] = Field(default_factory=list, validation_alias="effective_permissions")
 
     @field_validator("permisos", mode="before")
     @classmethod
@@ -144,6 +146,126 @@ class Token(BaseModel):
     full_name: str
 
 
+class LoginResponse(BaseModel):
+    status: Literal["authenticated", "mfa_required"] = "authenticated"
+    token_type: Optional[str] = None
+    role: Optional[str] = None
+    user_id: Optional[int] = None
+    full_name: Optional[str] = None
+
+
+class TwoFactorCode(BaseModel):
+    code: str = Field(..., pattern=r"^\d{6}$")
+
+
+class TwoFactorSetupResponse(BaseModel):
+    qr_code_data_url: str
+    manual_entry_key: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr = Field(..., max_length=MAX_EMAIL_LENGTH)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def validate_email(cls, email: str) -> str:
+        return validate_email_address(email)
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(..., min_length=32, max_length=128)
+    password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
+    security_answer: Optional[str] = Field(default=None, min_length=2, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, password: str) -> str:
+        return validate_registration_password(password)
+
+    @field_validator("security_answer")
+    @classmethod
+    def validate_security_answer(cls, answer: Optional[str]) -> Optional[str]:
+        if answer is None:
+            return None
+        normalized = answer.strip()
+        if len(normalized.encode("utf-8")) > MAX_PASSWORD_BYTES:
+            raise ValueError("La respuesta de seguridad excede el límite permitido.")
+        return normalized
+
+
+class UserProfileUpdate(BaseModel):
+    email: EmailStr = Field(..., max_length=MAX_EMAIL_LENGTH)
+    first_name: str = Field(..., min_length=1, max_length=60)
+    last_name: str = Field(..., min_length=1, max_length=60)
+    current_password: str = Field(..., min_length=1, max_length=MAX_PASSWORD_BYTES)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def validate_email(cls, email: str) -> str:
+        return validate_email_address(email)
+
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def validate_person_name(cls, name: str) -> str:
+        normalized = name.strip()
+        if not re.fullmatch(r"[^\W\d_]+(?:[ '-][^\W\d_]+)*", normalized, flags=re.UNICODE):
+            raise ValueError("El nombre solo puede incluir letras, espacios, apóstrofos y guiones.")
+        return normalized
+
+
+class SecurityQuestionUpdate(BaseModel):
+    question: str = Field(..., min_length=8, max_length=255)
+    answer: str = Field(..., min_length=2, max_length=128)
+    current_password: str = Field(..., min_length=1, max_length=MAX_PASSWORD_BYTES)
+
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, question: str) -> str:
+        normalized = question.strip()
+        if not normalized:
+            raise ValueError("La pregunta de seguridad no puede estar vacía.")
+        return normalized
+
+    @field_validator("answer")
+    @classmethod
+    def validate_answer(cls, answer: str) -> str:
+        normalized = answer.strip()
+        if len(normalized.encode("utf-8")) > MAX_PASSWORD_BYTES:
+            raise ValueError("La respuesta de seguridad excede el límite permitido.")
+        return normalized
+
+    @field_validator("current_password")
+    @classmethod
+    def validate_current_password(cls, password: str) -> str:
+        return validate_password_length(password)
+
 class TokenData(BaseModel):
     email: Optional[str] = None
     role: Optional[str] = None
+
+
+class RoleCreate(BaseModel):
+    name: str = Field(..., min_length=2, max_length=50, pattern=r"^[A-Za-z0-9 _-]+$")
+    description: str = Field(default="", max_length=255)
+    permission_ids: List[int] = Field(default_factory=list, max_length=100)
+
+
+class RoleResponse(BaseModel):
+    id: int
+    name: str
+    description: str
+    permission_ids: List[int]
+    permissions: List[str]
+
+
+class UserPermissionsUpdate(BaseModel):
+    permission_ids: List[int] = Field(max_length=100)
+
+
+class AdminPasswordResetRequest(BaseModel):
+    password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, password: str) -> str:
+        return validate_registration_password(password)

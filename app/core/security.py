@@ -38,6 +38,7 @@ def create_access_token(
     user_id: int,
     full_name: Optional[str] = None,
     expires_delta: Optional[timedelta] = None,
+    session_id: Optional[str] = None,
 ) -> str:
     """Crea un token JWT firmado conteniendo el ID, email, rol y expiración."""
     if expires_delta:
@@ -53,5 +54,7 @@ def create_access_token(
         "full_name": full_name or "",
         "iss": "TurismoInteligenteColombia",
     }
+    if session_id is not None:
+        to_encode["session_id"] = session_id
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
